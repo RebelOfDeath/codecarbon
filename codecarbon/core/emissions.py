@@ -22,11 +22,13 @@ class Emissions:
         self,
         data_source: DataSource,
         electricitymaps_api_token: Optional[str] = None,
+        custom_energy_mix: Optional[Dict[str, float]] = None,
         co2_signal_api_token: Optional[
             str
         ] = None,  # Deprecated, for backward compatibility
     ):
         self._data_source = data_source
+        self._custom_energy_mix = custom_energy_mix
 
         # Handle backward compatibility
         if co2_signal_api_token is not None:
@@ -138,6 +140,16 @@ class Emissions:
         :param geo: Country and region metadata
         :return: CO2 emissions in kg
         """
+        # If custom energy mix is provided, use it directly
+        if self._custom_energy_mix:
+            emissions_per_kWh = self._custom_energy_mix_to_emissions_rate(
+                self._custom_energy_mix
+            )
+            logger.info(
+                f"Using custom energy mix: {emissions_per_kWh.kgs_per_kWh * 1000:.2f} g.CO2eq/kWh"
+            )
+            return emissions_per_kWh.kgs_per_kWh * energy.kWh  # kgs
+
         if self._electricitymaps_api_token:
             try:
                 emissions = electricitymaps_api.get_emissions(
@@ -328,3 +340,44 @@ class Emissions:
         )
 
         return emissions_per_kWh
+
+    def _custom_energy_mix_to_emissions_rate(
+        self, energy_mix: Dict[str, float]
+    ) -> EmissionsPerKWh:
+        """
+        Convert a custom energy mix (percentages) into emissions per kWh.
+        :param energy_mix: A dictionary mapping energy source names to their percentage
+            shares (0-100). Example: {"coal": 20, "solar": 30, "wind": 50}
+        :return: an EmissionsPerKwh object representing the average emissions rate
+            in Kgs.CO2 / kWh
+        """
+        # Get carbon intensity per source from the data source
+        carbon_intensity_per_source = (
+            DataSource().get_carbon_intensity_per_source_data()
+        )
+
+        # Validate that percentages sum to approximately 100
+        total_percentage = sum(energy_mix.values())
+        if not (99 <= total_percentage <= 101):  # Allow small rounding errors
+            logger.warning(
+                f"Custom energy mix percentages sum to {total_percentage}%, expected 100%. "
+                "Results may be inaccurate."
+            )
+
+        carbon_intensity = 0
+        for energy_type, percentage in energy_mix.items():
+            # Look up carbon intensity for this energy type
+            carbon_intensity_for_type = carbon_intensity_per_source.get(energy_type)
+
+            if carbon_intensity_for_type is None:
+                logger.warning(
+                    f"Energy type '{energy_type}' not found in carbon intensity data. "
+                    f"Available types: {list(carbon_intensity_per_source.keys())}. "
+                    "This source will be ignored."
+                )
+                continue
+
+            # Add weighted contribution to total carbon intensity
+            carbon_intensity += (percentage / 100.0) * carbon_intensity_for_type
+
+        return EmissionsPerKWh.from_g_per_kWh(carbon_intensity)

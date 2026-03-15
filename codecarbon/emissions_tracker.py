@@ -190,6 +190,7 @@ class BaseEmissionsTracker(ABC):
         allow_multiple_runs: Optional[bool] = _sentinel,
         rapl_include_dram: Optional[bool] = _sentinel,
         rapl_prefer_psys: Optional[bool] = _sentinel,
+        custom_energy_mix: Optional[Dict[str, float]] = _sentinel,
     ):
         """
         :param project_name: Project name for current experiment run, default name
@@ -263,6 +264,13 @@ class BaseEmissionsTracker(ABC):
                                  (CPU + chipset + PCIe). When False, uses package domains which
                                  are more reliable. Note: psys can report higher values than
                                  CPU TDP and may be unreliable on older systems.
+        :param custom_energy_mix: Custom energy mix as a dictionary mapping energy source names
+                                  to their percentage shares (0-100). For example:
+                                  {"coal": 20, "solar": 30, "wind": 50}. When provided, this will
+                                  override the default energy mix data for the region. Energy sources
+                                  should match those in carbon_intensity_per_source.json (e.g., "coal",
+                                  "natural_gas", "nuclear", "solar", "wind", "hydro", etc.). The sum
+                                  of percentages should equal 100.
         """
 
         # logger.info("base tracker init")
@@ -343,6 +351,7 @@ class BaseEmissionsTracker(ABC):
         self._set_from_conf(
             experiment_id, "experiment_id", "5b0fa12a-3dd7-45bb-9766-cc326314d9f1"
         )
+        self._set_from_conf(custom_energy_mix, "custom_energy_mix", None)
 
         assert self._tracking_mode in ["machine", "process"]
         set_logger_level(self._log_level)
@@ -438,7 +447,7 @@ class BaseEmissionsTracker(ABC):
             self._conf["provider"] = cloud.provider
 
         self._emissions: Emissions = Emissions(
-            self._data_source, self._electricitymaps_api_token
+            self._data_source, self._electricitymaps_api_token, self._custom_energy_mix
         )
         self._init_output_methods(api_key=self._api_key)
 
